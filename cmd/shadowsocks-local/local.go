@@ -19,12 +19,13 @@ import (
 var debug ss.DebugLog
 
 var (
-	errAddrType      = errors.New("socks addr type not supported")
-	errVer           = errors.New("socks version not supported")
-	errMethod        = errors.New("socks only support 1 method now")
-	errAuthExtraData = errors.New("socks authentication get extra data")
-	errReqExtraData  = errors.New("socks request get extra data")
-	errCmd           = errors.New("socks command not supported")
+	errAddrType       = errors.New("socks addr type not supported")
+	errVer            = errors.New("socks version not supported")
+	errMethod         = errors.New("socks only support 1 method now")
+	errAuthExtraData  = errors.New("socks authentication get extra data")
+	errReqExtraData   = errors.New("socks request get extra data")
+	errCmd            = errors.New("socks command not supported")
+	shadowRemoteSites = map[string]struct{}{}
 )
 
 const (
@@ -72,7 +73,7 @@ func handShake(conn net.Conn) (err error) {
 	return
 }
 
-func getRequest(conn net.Conn) (rawaddr []byte, host string, err error) {
+func getRequest(conn net.Conn) (rawaddr []byte, addr string, host string, err error) {
 	const (
 		idVer   = 0
 		idCmd   = 1
@@ -132,18 +133,18 @@ func getRequest(conn net.Conn) (rawaddr []byte, host string, err error) {
 
 	rawaddr = buf[idType:reqLen]
 
-	if debug {
-		switch buf[idType] {
-		case typeIPv4:
-			host = net.IP(buf[idIP0 : idIP0+net.IPv4len]).String()
-		case typeIPv6:
-			host = net.IP(buf[idIP0 : idIP0+net.IPv6len]).String()
-		case typeDm:
-			host = string(buf[idDm0 : idDm0+buf[idDmLen]])
-		}
-		port := binary.BigEndian.Uint16(buf[reqLen-2 : reqLen])
-		host = net.JoinHostPort(host, strconv.Itoa(int(port)))
+	//if debug {
+	switch buf[idType] {
+	case typeIPv4:
+		host = net.IP(buf[idIP0 : idIP0+net.IPv4len]).String()
+	case typeIPv6:
+		host = net.IP(buf[idIP0 : idIP0+net.IPv6len]).String()
+	case typeDm:
+		host = string(buf[idDm0 : idDm0+buf[idDmLen]])
 	}
+	port := binary.BigEndian.Uint16(buf[reqLen-2 : reqLen])
+	addr = net.JoinHostPort(host, strconv.Itoa(int(port)))
+	//}
 
 	return
 }
@@ -287,7 +288,7 @@ func handleConnection(conn net.Conn) {
 		log.Println("socks handshake:", err)
 		return
 	}
-	rawaddr, addr, err := getRequest(conn)
+	rawaddr, addr, host, err := getRequest(conn)
 	if err != nil {
 		log.Println("error getting request:", err)
 		return
@@ -301,7 +302,22 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
-	remote, err := createServerConn(rawaddr, addr)
+	var remote net.Conn
+	if _, ok := shadowRemoteSites[host]; ok {
+		remote, err = createServerConn(rawaddr, addr)
+		log.Printf("[hit] socks5 connected to %s", addr)
+	} else {
+		// try direct connect first
+		if remote, err = net.DialTimeout("tcp", addr, 500*time.Millisecond); err == nil {
+			log.Printf("direct connected to %s", addr)
+		} else {
+			if remote, err = createServerConn(rawaddr, addr); err == nil {
+				shadowRemoteSites[host] = struct{}{}
+				log.Printf("[new] socks5 connected to %s", addr)
+			}
+		}
+	}
+
 	if err != nil {
 		if len(servers.srvCipher) > 1 {
 			log.Println("Failed connect to all avaiable shadowsocks server")
