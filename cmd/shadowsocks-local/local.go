@@ -303,17 +303,18 @@ func handleConnection(conn net.Conn) {
 	}
 
 	var remote net.Conn
+	var newSockSite bool
 	if _, ok := shadowRemoteSites[host]; ok {
 		remote, err = createServerConn(rawaddr, addr)
 		log.Printf("[hit] socks5 connected to %s", addr)
 	} else {
 		// try direct connect first
-		if remote, err = net.DialTimeout("tcp", addr, 500*time.Millisecond); err == nil {
-			log.Printf("direct connected to %s", addr)
+		if remote, err = net.DialTimeout("tcp", addr, 1000*time.Millisecond); err == nil {
+			log.Printf("[try] direct connected to %s", addr)
 		} else {
 			if remote, err = createServerConn(rawaddr, addr); err == nil {
-				shadowRemoteSites[host] = struct{}{}
-				log.Printf("[new] socks5 connected to %s", addr)
+				newSockSite = true
+				log.Printf("[2nd] socks5 connected to %s", addr)
 			}
 		}
 	}
@@ -330,8 +331,16 @@ func handleConnection(conn net.Conn) {
 		}
 	}()
 
-	go ss.PipeThenClose(conn, remote, ss.NO_TIMEOUT)
-	ss.PipeThenClose(remote, conn, ss.NO_TIMEOUT)
+	go io.Copy(remote, conn)
+	//remote.SetReadDeadline(time.Now().Add(60 * time.Second))
+	if _, err := io.Copy(conn, remote); err == nil && newSockSite {
+		shadowRemoteSites[host] = struct{}{}
+	} else {
+		if err != nil {
+			//log.Printf("[err] for %s (%s)", host, err)
+		}
+	}
+
 	closed = true
 	debug.Println("closed connection to", addr)
 }
