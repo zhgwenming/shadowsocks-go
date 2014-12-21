@@ -341,7 +341,6 @@ func handleConnection(conn net.Conn) {
 		}
 	}
 
-	closed = true
 	debug.Println("closed connection to", addr)
 }
 
