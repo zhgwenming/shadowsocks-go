@@ -23,11 +23,7 @@ func (s *site) extend(duration time.Duration) {
 func (s *site) expired() bool {
 	s.RLock()
 	defer s.RUnlock()
-	if time.Now().Before(s.expire) {
-		return false
-	}
-
-	return true
+	return time.Now().After(s.expire)
 }
 
 type siteCache struct {
@@ -44,11 +40,13 @@ func (c *siteCache) Get(host string) *site {
 	c.RLock()
 	defer c.RUnlock()
 
-	var s *site
-	if s, ok := c.httpSites[host]; ok {
-		if s.expired() {
-			return nil
-		}
+	s, ok := c.httpSites[host]
+	if !ok {
+		return nil
+	}
+
+	if s.expired() {
+		return nil
 	}
 
 	return s
