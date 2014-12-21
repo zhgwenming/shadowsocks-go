@@ -341,7 +341,7 @@ func handleConnection(conn net.Conn) {
 	if written, err := io.Copy(conn, remote); newSockSite {
 		if written > 0 {
 			remoteSites.Confirm(host)
-			log.Println("[fin] confirmed cache connection to ", addr)
+			log.Println("[fin] confirmed cache connection to", addr)
 		} else {
 			log.Printf("[err] for %s (%s) - %d", host, err, written)
 		}
