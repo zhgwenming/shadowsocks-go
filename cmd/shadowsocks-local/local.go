@@ -19,13 +19,13 @@ import (
 var debug ss.DebugLog
 
 var (
-	errAddrType       = errors.New("socks addr type not supported")
-	errVer            = errors.New("socks version not supported")
-	errMethod         = errors.New("socks only support 1 method now")
-	errAuthExtraData  = errors.New("socks authentication get extra data")
-	errReqExtraData   = errors.New("socks request get extra data")
-	errCmd            = errors.New("socks command not supported")
-	shadowRemoteSites = map[string]struct{}{}
+	errAddrType      = errors.New("socks addr type not supported")
+	errVer           = errors.New("socks version not supported")
+	errMethod        = errors.New("socks only support 1 method now")
+	errAuthExtraData = errors.New("socks authentication get extra data")
+	errReqExtraData  = errors.New("socks request get extra data")
+	errCmd           = errors.New("socks command not supported")
+	remoteSites      = NewSiteCache()
 )
 
 const (
@@ -304,17 +304,21 @@ func handleConnection(conn net.Conn) {
 
 	var remote net.Conn
 	var newSockSite bool
-	if _, ok := shadowRemoteSites[host]; ok {
+	if site := remoteSites.Get(host); site != nil {
 		remote, err = createServerConn(rawaddr, addr)
 		log.Printf("[hit] socks5 connected to %s", addr)
 	} else {
 		// try direct connect first
 		if remote, err = net.DialTimeout("tcp", addr, 1000*time.Millisecond); err == nil {
-			log.Printf("[try] direct connected to %s", addr)
+			log.Printf("-- direct connected to %s", addr)
 		} else {
 			if remote, err = createServerConn(rawaddr, addr); err == nil {
-				newSockSite = true
-				log.Printf("[2nd] socks5 connected to %s", addr)
+				if remoteSites.Add(host) {
+					newSockSite = true
+					log.Printf("[new] socks5 connected to %s", addr)
+				} else {
+					log.Printf("[---] socks5 connected to %s", addr)
+				}
 			}
 		}
 	}
@@ -336,8 +340,8 @@ func handleConnection(conn net.Conn) {
 	//remote.SetReadDeadline(time.Now().Add(60 * time.Second))
 	if written, err := io.Copy(conn, remote); newSockSite {
 		if written > 0 {
-			shadowRemoteSites[host] = struct{}{}
-			log.Println("-- cached connection to ", addr)
+			remoteSites.Confirm(host)
+			log.Println("[fin] confirmed cache connection to ", addr)
 		} else {
 			log.Printf("[err] for %s (%s) - %d", host, err, written)
 		}
