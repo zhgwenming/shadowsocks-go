@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -276,12 +277,7 @@ func handleConnection(conn net.Conn) {
 	if debug {
 		debug.Printf("socks connect from %s\n", conn.RemoteAddr().String())
 	}
-	closed := false
-	defer func() {
-		if !closed {
-			conn.Close()
-		}
-	}()
+	defer conn.Close()
 
 	var err error = nil
 	if err = handShake(conn); err != nil {
@@ -325,13 +321,15 @@ func handleConnection(conn net.Conn) {
 		}
 		return
 	}
-	defer func() {
-		if !closed {
-			remote.Close()
-		}
+	defer remote.Close()
+
+	wgroup := &sync.WaitGroup{}
+	wgroup.Add(1)
+	go func() {
+		io.Copy(remote, conn)
+		wgroup.Done()
 	}()
 
-	go io.Copy(remote, conn)
 	//remote.SetReadDeadline(time.Now().Add(60 * time.Second))
 	if _, err := io.Copy(conn, remote); err == nil && newSockSite {
 		shadowRemoteSites[host] = struct{}{}
@@ -340,6 +338,7 @@ func handleConnection(conn net.Conn) {
 			//log.Printf("[err] for %s (%s)", host, err)
 		}
 	}
+	wgroup.Wait()
 
 	debug.Println("closed connection to", addr)
 }
