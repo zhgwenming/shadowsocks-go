@@ -329,20 +329,22 @@ func handleConnection(conn net.Conn) {
 	go func() {
 		io.Copy(remote, conn)
 		conn.Close()
-		remote.SetDeadline(time.Now())
+		remote.SetReadDeadline(time.Now())
 	}()
 	forked = true
 
 	//remote.SetReadDeadline(time.Now().Add(60 * time.Second))
-	if _, err := io.Copy(conn, remote); err == nil && newSockSite {
-		shadowRemoteSites[host] = struct{}{}
-	} else {
-		if err != nil {
-			//log.Printf("[err] for %s (%s)", host, err)
+	if written, err := io.Copy(conn, remote); newSockSite {
+		if written > 0 {
+			shadowRemoteSites[host] = struct{}{}
+			log.Println("-- cached connection to ", addr)
+		} else {
+			log.Printf("[err] for %s (%s) - %d", host, err, written)
 		}
 	}
+
 	remote.Close()
-	conn.SetDeadline(time.Now())
+	conn.SetReadDeadline(time.Now())
 
 	debug.Println("closed connection to", addr)
 }
