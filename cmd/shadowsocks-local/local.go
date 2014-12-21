@@ -329,6 +329,7 @@ func handleConnection(conn net.Conn) {
 	go func() {
 		io.Copy(remote, conn)
 		conn.Close()
+		remote.SetDeadline(time.Now())
 	}()
 	forked = true
 
@@ -341,6 +342,7 @@ func handleConnection(conn net.Conn) {
 		}
 	}
 	remote.Close()
+	conn.SetDeadline(time.Now())
 
 	debug.Println("closed connection to", addr)
 }
