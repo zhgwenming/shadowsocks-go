@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -305,6 +306,8 @@ func handleConnection(conn net.Conn) {
 	var remote net.Conn
 	var newSockSite bool
 	if site := remoteSites.Get(host); site != nil {
+		newSockSite = site.fix()
+
 		remote, err = createServerConn(rawaddr, addr)
 		log.Printf("[hit] socks5 connected to %s", addr)
 	} else {
@@ -338,13 +341,23 @@ func handleConnection(conn net.Conn) {
 	forked = true
 
 	//remote.SetReadDeadline(time.Now().Add(60 * time.Second))
-	if written, err := io.Copy(conn, remote); newSockSite {
-		if written > 0 {
-			remoteSites.Confirm(host)
-			log.Println("[fin] confirmed cache connection to", addr)
+	written, err := io.Copy(conn, remote)
+	if newSockSite && written > 0 {
+		remoteSites.Confirm(host)
+		log.Println("[fin] confirmed cache connection to", addr)
+	} else if err != nil {
+		if e, ok := err.(*net.OpError); ok && e.Op == "read" {
+			if errno, ok := e.Err.(syscall.Errno); ok && errno == syscall.ECONNRESET {
+				if remoteSites.Add(host) {
+					log.Printf("[lazy] add %s to remote cache", addr)
+				}
+				//} else {
+				//	log.Printf("[neterr] other error for %s (%v) - %d", host, e, written)
+			}
 		} else {
-			log.Printf("[err] for %s (%s) - %d", host, err, written)
+			log.Printf("[err] for %s (%v) - %d", host, err, written)
 		}
+
 	}
 
 	remote.Close()

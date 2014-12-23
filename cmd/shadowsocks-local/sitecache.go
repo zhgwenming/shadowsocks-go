@@ -9,6 +9,7 @@ type site struct {
 	sync.RWMutex
 	host   string
 	expire time.Time
+	lazy   bool
 }
 
 func (s *site) extend(duration time.Duration) {
@@ -36,23 +37,23 @@ func NewSiteCache() *siteCache {
 	return &siteCache{httpSites: http}
 }
 
-func (c *siteCache) Get(host string) *site {
+func (c *siteCache) Get(host string) (*site, bool) {
 	c.RLock()
 	defer c.RUnlock()
 
 	s, ok := c.httpSites[host]
 	if !ok {
-		return nil
+		return nil, false
 	}
 
 	if s.expired() {
-		return nil
+		return nil, false
 	}
 
-	return s
+	return s, s.lazyadd
 }
 
-func (c *siteCache) Add(host string) bool {
+func (c *siteCache) Add(host string, lazy bool) bool {
 	c.Lock()
 	defer c.Unlock()
 
@@ -61,12 +62,14 @@ func (c *siteCache) Add(host string) bool {
 	if s, ok = c.httpSites[host]; ok {
 		if s.expired() {
 			s.extend(5 * time.Minute)
+			s.lazy = lazy
 			return true
 		}
 	} else {
 		s = &site{host: host}
 		s.extend(5 * time.Minute)
 		c.httpSites[host] = s
+		s.lazy = lazy
 		return true
 	}
 
@@ -74,11 +77,11 @@ func (c *siteCache) Add(host string) bool {
 }
 
 func (c *siteCache) Confirm(host string) bool {
-	c.Lock()
-	defer c.Unlock()
+	c.RLock()
+	defer c.RUnlock()
 
 	if s, ok := c.httpSites[host]; ok {
-		s.extend(7 * 24 * time.Hour)
+		s.extend(24 * time.Hour)
 		return true
 	}
 	return false
