@@ -305,18 +305,18 @@ func handleConnection(conn net.Conn) {
 
 	var remote net.Conn
 	var newSockSite bool
-	if site := remoteSites.Get(host); site != nil {
-		newSockSite = site.fix()
+	if site, lazy := remoteSites.Get(host); site != nil {
+		newSockSite = lazy
 
 		remote, err = createServerConn(rawaddr, addr)
-		log.Printf("[hit] socks5 connected to %s", addr)
+		log.Printf("[hit] %s socks5 connected to %s", lazy, addr)
 	} else {
 		// try direct connect first
 		if remote, err = net.DialTimeout("tcp", addr, 1000*time.Millisecond); err == nil {
 			log.Printf("-- direct connected to %s", addr)
 		} else {
 			if remote, err = createServerConn(rawaddr, addr); err == nil {
-				if remoteSites.Add(host) {
+				if remoteSites.Add(host, false) {
 					newSockSite = true
 					log.Printf("[new] socks5 connected to %s", addr)
 				} else {
@@ -343,12 +343,13 @@ func handleConnection(conn net.Conn) {
 	//remote.SetReadDeadline(time.Now().Add(60 * time.Second))
 	written, err := io.Copy(conn, remote)
 	if newSockSite && written > 0 {
-		remoteSites.Confirm(host)
-		log.Println("[fin] confirmed cache connection to", addr)
+		if remoteSites.Confirm(host) {
+			log.Println("[fin] confirmed cache connection to", addr)
+		}
 	} else if err != nil {
 		if e, ok := err.(*net.OpError); ok && e.Op == "read" {
 			if errno, ok := e.Err.(syscall.Errno); ok && errno == syscall.ECONNRESET {
-				if remoteSites.Add(host) {
+				if remoteSites.Add(host, true) {
 					log.Printf("[lazy] add %s to remote cache", addr)
 				}
 				//} else {

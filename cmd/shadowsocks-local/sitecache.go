@@ -12,13 +12,25 @@ type site struct {
 	lazy   bool
 }
 
-func (s *site) extend(duration time.Duration) {
+func (s *site) extend(duration time.Duration, lazy bool) bool {
 	s.Lock()
 	defer s.Unlock()
 
 	cur := time.Now()
 	t := cur.Add(duration)
 	s.expire = t
+
+	if s.lazy != lazy {
+		s.lazy = lazy
+		return true
+	}
+
+	return false
+}
+
+// with lock holded
+func (s *site) _expired() bool {
+	return time.Now().After(s.expire)
 }
 
 func (s *site) expired() bool {
@@ -46,11 +58,13 @@ func (c *siteCache) Get(host string) (*site, bool) {
 		return nil, false
 	}
 
-	if s.expired() {
+	s.RLock()
+	defer s.RUnlock()
+	if s._expired() {
 		return nil, false
 	}
 
-	return s, s.lazyadd
+	return s, s.lazy
 }
 
 func (c *siteCache) Add(host string, lazy bool) bool {
@@ -61,15 +75,13 @@ func (c *siteCache) Add(host string, lazy bool) bool {
 	var ok bool
 	if s, ok = c.httpSites[host]; ok {
 		if s.expired() {
-			s.extend(5 * time.Minute)
-			s.lazy = lazy
+			s.extend(5*time.Minute, lazy)
 			return true
 		}
 	} else {
 		s = &site{host: host}
-		s.extend(5 * time.Minute)
+		s.extend(5*time.Minute, lazy)
 		c.httpSites[host] = s
-		s.lazy = lazy
 		return true
 	}
 
@@ -81,8 +93,8 @@ func (c *siteCache) Confirm(host string) bool {
 	defer c.RUnlock()
 
 	if s, ok := c.httpSites[host]; ok {
-		s.extend(24 * time.Hour)
-		return true
+		return s.extend(24*time.Hour, false)
 	}
+
 	return false
 }
