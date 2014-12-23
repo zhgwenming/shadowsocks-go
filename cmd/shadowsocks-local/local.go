@@ -347,8 +347,18 @@ func handleConnection(conn net.Conn) {
 	//remote.SetReadDeadline(time.Now().Add(60 * time.Second))
 	written, err := io.Copy(conn, remote)
 	if newSockSite && written > 0 {
-		if remoteSites.Confirm(host) {
-			log.Println("[fin] confirmed cache connection to", addr)
+		if err == nil {
+			if remoteSites.Confirm(host) {
+				log.Println("[fin] confirmed cache connection to", addr)
+			}
+		} else {
+			if e, ok := err.(*net.OpError); ok && e.Op == "read" && e.Timeout() {
+				if remoteSites.Confirm(host) {
+					log.Println("[fin] confirmed cache connection to", addr)
+				}
+			} else {
+				log.Printf("[err] premature transmission for %s (%v) - %d", host, err, written)
+			}
 		}
 	} else if err != nil {
 		if e, ok := err.(*net.OpError); ok && e.Op == "read" {
@@ -358,6 +368,7 @@ func handleConnection(conn net.Conn) {
 				}
 				//} else {
 				//	log.Printf("[neterr] other error for %s (%v) - %d", host, e, written)
+				//}
 			}
 		} else {
 			log.Printf("[err] for %s (%v) - %d", host, err, written)
