@@ -308,8 +308,12 @@ func handleConnection(conn net.Conn) {
 	if site, lazy := remoteSites.Get(host); site != nil {
 		newSockSite = lazy
 
+		hint := "hit"
+		if lazy {
+			hint = "lazy"
+		}
 		remote, err = createServerConn(rawaddr, addr)
-		log.Printf("[hit] %s socks5 connected to %s", lazy, addr)
+		log.Printf("[%s] socks5 connected to %s", hint, addr)
 	} else {
 		// try direct connect first
 		if remote, err = net.DialTimeout("tcp", addr, 1000*time.Millisecond); err == nil {
