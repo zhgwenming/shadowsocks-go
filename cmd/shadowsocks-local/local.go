@@ -362,13 +362,14 @@ func handleConnection(conn net.Conn) {
 		}
 	} else if err != nil {
 		if e, ok := err.(*net.OpError); ok && e.Op == "read" {
-			if errno, ok := e.Err.(syscall.Errno); ok && errno == syscall.ECONNRESET {
-				if remoteSites.Add(host, true) {
-					log.Printf("[lazy] add %s to remote cache", addr)
+			if errno, ok := e.Err.(syscall.Errno); ok {
+				if errno == syscall.ECONNRESET || written == 0 {
+					if remoteSites.Add(host, true) {
+						log.Printf("[lazy] add %s to remote cache - %d", addr, written)
+					}
+				} else {
+					log.Printf("[neterr] other error for %s (%v) - %d", host, errno, written)
 				}
-				//} else {
-				//	log.Printf("[neterr] other error for %s (%v) - %d", host, e, written)
-				//}
 			}
 		} else {
 			log.Printf("[err] for %s (%v) - %d", host, err, written)
