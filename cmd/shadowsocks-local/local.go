@@ -287,6 +287,8 @@ func NetpollerReadTimeout(err error) bool {
 // babysitting the direct connection
 func duplexCopy(remote net.Conn, conn net.Conn) (received int64, err error) {
 
+	var extra int64
+
 	wait := make(chan struct{})
 
 	go func() {
@@ -295,50 +297,40 @@ func duplexCopy(remote net.Conn, conn net.Conn) (received int64, err error) {
 		close(wait)
 	}()
 
-	for {
-		var extra int64
-		// received data after timeo or closed from client
+	checkSender := func(w <-chan struct{}) bool {
 		select {
-		case <-wait:
-			// sender caused timeo, set reset from net.timeoutError to nil
-			if NetpollerReadTimeout(err) {
-				err = nil
-			}
-			return
+		case <-w:
+			// sender exited
+			return false
 		default:
-			// - sender is still alive
-			// 	1. timer caused timeo
-			// 	2. reset caused end of copy
-			if err == nil || NetpollerReadTimeout(err) {
-				if err == nil {
-					remote.SetReadDeadline(time.Now().Add(time.Second))
-				} else {
-					// extend the timeo to handle the keepalive connection
-					remote.SetReadDeadline(time.Time{})
-				}
-
-				// go ahead if received data or we're the first iteration
-				if err == nil || extra > 0 {
-					extra, err = io.Copy(conn, remote)
-					received += extra
-
-					if NetpollerReadTimeout(err) {
-						continue
-					} else {
-						// if err == nil or other errors
-						break
-					}
-				}
-			}
+			return true
 		}
 	}
 
-	// end the sender goroutine
-	conn.SetReadDeadline(time.Now())
-	<-wait
+	remote.SetReadDeadline(time.Now().Add(time.Second))
+	extra, err = io.Copy(conn, remote)
+	received += extra
 
+	if _, ok := checkSender(wait); ok {
+		if NetpollerReadTimeout(err) {
+			if extra > 0 {
+				// have data received
+				remote.SetReadDeadline(time.Time{})
+				extra, err = io.Copy(conn, remote)
+				received += extra
+
+			}
+		}
+		// returning with:
+		// 1. nil - remote closed connection
+		// 2. other non-netpoller (os/syscall - reset etc.) errors
+		// 3  OpError{Err: net.timeoutError}
+
+		// end the sender goroutine
+		conn.SetReadDeadline(time.Now())
+		<-wait
+	}
 	return
-
 }
 
 func handleConnection(conn net.Conn) {
