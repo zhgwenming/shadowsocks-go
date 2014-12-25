@@ -273,58 +273,36 @@ func createServerConn(rawaddr []byte, addr string) (remote *ss.Conn, err error) 
 	return nil, err
 }
 
-func directHandle(remote net.Conn, conn net.Conn) (io.Reader, error) {
+// babysitting the direct connection
+func directHandle(remote net.Conn, conn net.Conn) (received int, err error) {
 
-	buf = new(bytes.Buffer)
+	wait := make(chan struct{})
 
 	go func() {
 		io.Copy(remote, conn)
-		conn.Close()
 		remote.SetReadDeadline(time.Now())
+		close(wait)
 	}()
 
 	remote.SetReadDeadline(time.Now().Add(time.Second))
-	written, err := io.Copy(conn, remote)
+	received, err = io.Copy(conn, remote)
 
-	if written == 0 {
-		if err != nil {
-			if e, ok := err.(*net.OpError); ok && e.Op == "read" {
-				if errno, ok := e.Err.(syscall.Errno); ok {
-					if errno == syscall.ECONNRESET || written == 0 {
-						if remoteSites.Add(host, true) {
-							log.Printf("[lazy] add %s to remote cache - %d", addr, written)
-						}
-					} else {
-						log.Printf("[neterr] other error for %s (%v) - %d", host, errno, written)
-					}
-				}
-			} else {
-				log.Printf("[err] for %s (%v) - %d", host, err, written)
-			}
+	// received data after timeo or closed from client
+	if received > 0 {
+		if _, ok := <-wait; !ok {
+			// - sender is still alive, reset the timeo to handle the keepalive connection
+			remote.SetReadDeadline(time.Time{})
+
+			var extra int
+			extra, err = io.Copy(conn, remote)
+			received += extra
 		}
-	} else if written > 0 {
-		// unrecoverable
-		if err == nil {
-			return nil, nil
-		} else {
-			if e, ok := err.(*net.OpError); ok && e.Op == "read" {
-				// syscall error, could be reset or tcp connection timeout
-				if errno, ok := e.Err.(syscall.Errno); ok {
-					if errno == syscall.ECONNRESET {
-					}
-				}
-			} else {
-				log.Printf("[neterr] other error for %s (%v) - %d", host, errno, written)
-				return nil, err
-			}
-		}
-	} else if written < 0 {
-		// bug, should never get here
-		log.Fatalf("BUG, written bytes less than zero, %d, %s", written, err)
 	}
 
-	remote.Close()
+	// end the goroutine which sending data direct to the site
 	conn.SetReadDeadline(time.Now())
+	<-wait
+	return
 }
 
 func handleConnection(conn net.Conn) {
