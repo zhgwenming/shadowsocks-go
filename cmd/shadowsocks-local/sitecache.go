@@ -93,7 +93,7 @@ func (c *siteCache) Confirm(host string) bool {
 	defer c.RUnlock()
 
 	if s, ok := c.httpSites[host]; ok {
-		return s.extend(24*time.Hour, false)
+		return s.extend(30*time.Minute, false)
 	}
 
 	return false
