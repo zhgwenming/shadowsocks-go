@@ -7,12 +7,12 @@ import (
 
 type site struct {
 	sync.RWMutex
-	host   string
-	expire time.Time
-	lazy   bool
+	host      string
+	expire    time.Time
+	confirmed bool
 }
 
-func (s *site) extend(duration time.Duration, lazy bool) bool {
+func (s *site) extend(duration time.Duration, confirm bool) bool {
 	s.Lock()
 	defer s.Unlock()
 
@@ -20,8 +20,8 @@ func (s *site) extend(duration time.Duration, lazy bool) bool {
 	t := cur.Add(duration)
 	s.expire = t
 
-	if s.lazy != lazy {
-		s.lazy = lazy
+	if s.confirmed != confirm {
+		s.confirmed = confirm
 		return true
 	}
 
@@ -64,10 +64,10 @@ func (c *siteCache) Get(host string) (*site, bool) {
 		return nil, false
 	}
 
-	return s, s.lazy
+	return s, s.confirmed
 }
 
-func (c *siteCache) Add(host string, lazy bool) bool {
+func (c *siteCache) Add(host string) bool {
 	c.Lock()
 	defer c.Unlock()
 
@@ -75,12 +75,12 @@ func (c *siteCache) Add(host string, lazy bool) bool {
 	var ok bool
 	if s, ok = c.httpSites[host]; ok {
 		if s.expired() {
-			s.extend(5*time.Minute, lazy)
+			s.extend(5*time.Minute, false)
 			return true
 		}
 	} else {
 		s = &site{host: host}
-		s.extend(5*time.Minute, lazy)
+		s.extend(5*time.Minute, false)
 		c.httpSites[host] = s
 		return true
 	}
@@ -93,7 +93,7 @@ func (c *siteCache) Confirm(host string) bool {
 	defer c.RUnlock()
 
 	if s, ok := c.httpSites[host]; ok {
-		return s.extend(30*time.Minute, false)
+		return s.extend(30*time.Minute, true)
 	}
 
 	return false

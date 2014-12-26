@@ -449,12 +449,14 @@ func handleConnection(conn net.Conn) {
 	var received int64
 
 	var newSockSite bool
-	if site, lazy := remoteSites.Get(host); site != nil {
-		newSockSite = lazy
+	if site, confirmed := remoteSites.Get(host); site != nil {
+		var hint string
 
-		hint := "hit"
-		if lazy {
-			hint = "lazy"
+		if confirmed {
+			hint = "hit"
+		} else {
+			newSockSite = true
+			hint = "-z-"
 		}
 
 		remote, err = createServerConn(rawaddr, addr)
@@ -476,8 +478,8 @@ func handleConnection(conn net.Conn) {
 			switch {
 			case received > 0:
 				if IsReset(err) {
-					if remoteSites.Add(host, true) {
-						log.Printf("[pre] add %s to remote cache - %d (%s)", addr, received, err)
+					if remoteSites.Add(host) {
+						log.Printf("[pre] add %s to remote cache - [received: %d] (%s)", addr, received, err)
 					}
 				}
 				remote.Close()
@@ -488,10 +490,10 @@ func handleConnection(conn net.Conn) {
 				remote.Close()
 
 				if IsReset(err) {
-					log.Printf("-- fallthrough to socks5 - %s [%d](err: %s)", addr, buf.Len(), err)
+					log.Printf("-- fallthrough to socks5 - %s [bufsz: %d] (err: %s)", addr, buf.Len(), err)
 				} else {
 					if err != nil {
-						log.Printf("-- returning - %s [%d](err: %s)", addr, buf.Len(), err)
+						log.Printf("-- returning - %s [bufsz: %d] (err: %s)", addr, buf.Len(), err)
 					}
 					// normal connection end
 					conn.Close()
@@ -514,7 +516,7 @@ func handleConnection(conn net.Conn) {
 			return
 		}
 
-		if remoteSites.Add(host, false) {
+		if remoteSites.Add(host) {
 			newSockSite = true
 			log.Printf("[new] socks5 connected to %s", addr)
 		} else {
@@ -525,15 +527,15 @@ func handleConnection(conn net.Conn) {
 	}
 
 	if err != nil {
-		log.Printf("failed connection to %s (%s)[%d]", addr, err, received)
+		log.Printf("[!!!] failed connect to %s - (%s) [%d]", addr, err, received)
 	}
 
 	debug.Println("closed connection to", addr)
 
 	if newSockSite {
-		if err == nil {
+		if err == nil && received > 0 {
 			if remoteSites.Confirm(host) {
-				log.Println("[fin] confirmed cache connection to", addr)
+				log.Printf("[fin] confirmed cache connection to %s [received: %d]", addr, received)
 			}
 		}
 	}
