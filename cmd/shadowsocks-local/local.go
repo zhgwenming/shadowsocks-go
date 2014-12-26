@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"flag"
@@ -285,14 +286,15 @@ func NetpollerReadTimeout(err error) bool {
 }
 
 // babysitting the direct connection
-func duplexCopy(remote net.Conn, conn net.Conn) (received int64, err error) {
+func directDuplexCopy(remote net.Conn, conn net.Conn, buf io.Writer) (received int64, err error) {
 
 	var extra int64
 
 	wait := make(chan struct{})
 
 	go func() {
-		io.Copy(remote, conn)
+		to := io.MultiWriter(remote, buf)
+		io.Copy(to, conn)
 		remote.SetReadDeadline(time.Now())
 		close(wait)
 	}()
@@ -338,6 +340,27 @@ func duplexCopy(remote net.Conn, conn net.Conn) (received int64, err error) {
 	return
 }
 
+func forwardDuplexCopyClose(remote net.Conn, conn net.Conn, buf io.Reader) (received int64, err error) {
+	go func() {
+		if buf != nil {
+			io.Copy(remote, buf)
+		}
+		io.Copy(remote, conn)
+		conn.Close()
+		remote.SetReadDeadline(time.Now())
+	}()
+
+	received, err = io.Copy(conn, remote)
+	remote.Close()
+	conn.SetReadDeadline(time.Now())
+
+	if NetpollerReadTimeout(err) {
+		err = nil
+	}
+	return
+
+}
+
 func handleConnection(conn net.Conn) {
 	var forked bool
 	if debug {
@@ -370,6 +393,7 @@ func handleConnection(conn net.Conn) {
 
 	var remote net.Conn
 	var newSockSite bool
+	var received int64
 	if site, lazy := remoteSites.Get(host); site != nil {
 		newSockSite = lazy
 
@@ -377,75 +401,75 @@ func handleConnection(conn net.Conn) {
 		if lazy {
 			hint = "lazy"
 		}
+
 		remote, err = createServerConn(rawaddr, addr)
+		if err != nil {
+			if len(servers.srvCipher) > 1 {
+				log.Println("Failed connect to all avaiable shadowsocks server")
+			}
+			return
+		}
+
 		log.Printf("[%s] socks5 connected to %s", hint, addr)
+		received, err = forwardDuplexCopyClose(remote, conn, nil)
 	} else {
+
+		buf := new(bytes.Buffer)
 		// try direct connect first
 		if remote, err = net.DialTimeout("tcp", addr, 1000*time.Millisecond); err == nil {
 			log.Printf("-- direct connected to %s", addr)
-		} else {
-			if remote, err = createServerConn(rawaddr, addr); err == nil {
-				if remoteSites.Add(host, false) {
-					newSockSite = true
-					log.Printf("[new] socks5 connected to %s", addr)
-				} else {
-					log.Printf("[---] socks5 connected to %s", addr)
+			received, err := directDuplexCopy(remote, conn, buf)
+
+			switch {
+			case received > 0:
+				if err != nil {
+					if remoteSites.Add(host, true) {
+						log.Printf("[pre] add %s to remote cache - %d", addr, received)
+					}
 				}
+				remote.Close()
+				conn.Close()
+				return
+			case received == 0:
+				// recoverable connection
+				remote.Close()
+			case received < 0:
+				log.Printf("[!!] add %s to remote cache - %d", addr, received)
+				remote.Close()
+				conn.Close()
+				return
 			}
 		}
+
+		remote, err = createServerConn(rawaddr, addr)
+		if err != nil {
+			if len(servers.srvCipher) > 1 {
+				log.Println("Failed connect to all avaiable shadowsocks server")
+			}
+			return
+		}
+
+		if remoteSites.Add(host, false) {
+			newSockSite = true
+			log.Printf("[new] socks5 connected to %s", addr)
+		} else {
+			log.Printf("[---] socks5 connected to %s", addr)
+		}
+
+		received, err = forwardDuplexCopyClose(remote, conn, buf)
 	}
 
 	if err != nil {
-		if len(servers.srvCipher) > 1 {
-			log.Println("Failed connect to all avaiable shadowsocks server")
-		}
-		return
+		log.Printf("failed connection to %s (%s)[%d]", addr, err, received)
 	}
-
-	go func() {
-		io.Copy(remote, conn)
-		conn.Close()
-		remote.SetReadDeadline(time.Now())
-	}()
-	forked = true
-
-	//remote.SetReadDeadline(time.Now().Add(60 * time.Second))
-	written, err := io.Copy(conn, remote)
-	if newSockSite && written > 0 {
-		if err == nil {
-			if remoteSites.Confirm(host) {
-				log.Println("[fin] confirmed cache connection to", addr)
-			}
-		} else {
-			if e, ok := err.(*net.OpError); ok && e.Op == "read" && e.Timeout() {
-				if remoteSites.Confirm(host) {
-					log.Println("[fin] confirmed cache connection to", addr)
-				}
-			} else {
-				log.Printf("[err] premature transmission for %s (%v) - %d", host, err, written)
-			}
-		}
-	} else if err != nil {
-		if e, ok := err.(*net.OpError); ok && e.Op == "read" {
-			if errno, ok := e.Err.(syscall.Errno); ok {
-				if errno == syscall.ECONNRESET || written == 0 {
-					if remoteSites.Add(host, true) {
-						log.Printf("[lazy] add %s to remote cache - %d", addr, written)
-					}
-				} else {
-					log.Printf("[neterr] other error for %s (%v) - %d", host, errno, written)
-				}
-			}
-		} else {
-			log.Printf("[err] for %s (%v) - %d", host, err, written)
-		}
-
-	}
-
-	remote.Close()
-	conn.SetReadDeadline(time.Now())
 
 	debug.Println("closed connection to", addr)
+
+	if newSockSite {
+		if remoteSites.Confirm(host) {
+			log.Println("[fin] confirmed cache connection to", addr)
+		}
+	}
 }
 
 func run(listenAddr string) {
