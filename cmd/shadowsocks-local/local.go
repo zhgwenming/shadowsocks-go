@@ -351,14 +351,17 @@ func forwardDuplexCopyClose(remote net.Conn, conn net.Conn, buf *bytes.Buffer) (
 			//log.Printf("[forward] buffer sent %d (%s)", sent, e)
 		}
 		io.Copy(remote, conn)
+		remote.SetReadDeadline(time.Now())
 		//log.Printf("[forward2] buffer sent %d (%s)", sent, e)
-		conn.Close()
 	}()
 
 	received, err = io.Copy(conn, remote)
-	remote.Close()
+	conn.SetReadDeadline(time.Now())
 
 	//log.Printf("[forward2] buffer got %d (%s)", received, err)
+
+	remote.Close()
+	conn.Close()
 
 	if NetpollerReadTimeout(err) {
 		err = nil
