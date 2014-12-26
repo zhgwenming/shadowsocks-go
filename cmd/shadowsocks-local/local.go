@@ -434,7 +434,7 @@ func handleConnection(conn net.Conn) {
 			case received > 0:
 				if err != nil {
 					if remoteSites.Add(host, true) {
-						log.Printf("[pre] add %s to remote cache - %d", addr, received)
+						log.Printf("[pre] add %s to remote cache - %d (%s)", addr, received, err)
 					}
 				}
 				remote.Close()
