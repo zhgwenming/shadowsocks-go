@@ -337,22 +337,28 @@ func directDuplexCopy(remote net.Conn, conn net.Conn, buf io.Writer) (received i
 	// end the sender goroutine
 	conn.SetReadDeadline(time.Now())
 	<-wait
+
+	// reset conn timer to accept new data
+	conn.SetReadDeadline(time.Time{})
+
 	return
 }
 
-func forwardDuplexCopyClose(remote net.Conn, conn net.Conn, buf io.Reader) (received int64, err error) {
+func forwardDuplexCopyClose(remote net.Conn, conn net.Conn, buf *bytes.Buffer) (received int64, err error) {
 	go func() {
-		if buf != nil {
+		if buf.Len() > 0 {
 			io.Copy(remote, buf)
+			//log.Printf("[forward] buffer sent %d (%s)", sent, e)
 		}
 		io.Copy(remote, conn)
+		//log.Printf("[forward2] buffer sent %d (%s)", sent, e)
 		conn.Close()
-		remote.SetReadDeadline(time.Now())
 	}()
 
 	received, err = io.Copy(conn, remote)
 	remote.Close()
-	conn.SetReadDeadline(time.Now())
+
+	//log.Printf("[forward2] buffer got %d (%s)", received, err)
 
 	if NetpollerReadTimeout(err) {
 		err = nil
@@ -391,9 +397,12 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
+	buf := new(bytes.Buffer)
+
 	var remote net.Conn
-	var newSockSite bool
 	var received int64
+
+	var newSockSite bool
 	if site, lazy := remoteSites.Get(host); site != nil {
 		newSockSite = lazy
 
@@ -411,14 +420,12 @@ func handleConnection(conn net.Conn) {
 		}
 
 		log.Printf("[%s] socks5 connected to %s", hint, addr)
-		received, err = forwardDuplexCopyClose(remote, conn, nil)
+		received, err = forwardDuplexCopyClose(remote, conn, buf)
 	} else {
-
-		buf := new(bytes.Buffer)
 		// try direct connect first
 		if remote, err = net.DialTimeout("tcp", addr, 1000*time.Millisecond); err == nil {
 			log.Printf("-- direct connected to %s", addr)
-			received, err := directDuplexCopy(remote, conn, buf)
+			received, err = directDuplexCopy(remote, conn, buf)
 
 			switch {
 			case received > 0:
@@ -433,6 +440,7 @@ func handleConnection(conn net.Conn) {
 			case received == 0:
 				// recoverable connection
 				remote.Close()
+				log.Printf("-- fallthrough to socks5 - %s (%s)", addr, err)
 			case received < 0:
 				log.Printf("[!!] add %s to remote cache - %d", addr, received)
 				remote.Close()
