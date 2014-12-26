@@ -311,25 +311,30 @@ func duplexCopy(remote net.Conn, conn net.Conn) (received int64, err error) {
 	extra, err = io.Copy(conn, remote)
 	received += extra
 
-	if _, ok := checkSender(wait); ok {
-		if NetpollerReadTimeout(err) {
-			if extra > 0 {
-				// have data received
-				remote.SetReadDeadline(time.Time{})
+	if NetpollerReadTimeout(err) {
+		// have data received
+		if extra > 0 {
+			remote.SetReadDeadline(time.Time{})
+			// deadline should extended before check sender
+			// give sender a chance to end rceiver
+			if ok := checkSender(wait); ok {
 				extra, err = io.Copy(conn, remote)
 				received += extra
-
 			}
 		}
-		// returning with:
-		// 1. nil - remote closed connection
-		// 2. other non-netpoller (os/syscall - reset etc.) errors
-		// 3  OpError{Err: net.timeoutError}
-
-		// end the sender goroutine
-		conn.SetReadDeadline(time.Now())
-		<-wait
 	}
+
+	// OpError{Err: net.timeoutError}
+	if NetpollerReadTimeout(err) {
+		err = nil
+	}
+
+	// returning with:
+	// 1. nil - remote closed connection
+	// 2. other non-netpoller (os/syscall - reset etc.) errors
+	// end the sender goroutine
+	conn.SetReadDeadline(time.Now())
+	<-wait
 	return
 }
 
