@@ -443,7 +443,11 @@ func handleConnection(conn net.Conn) {
 			case received == 0:
 				// recoverable connection
 				remote.Close()
-				log.Printf("-- fallthrough to socks5 - %s [%d](err: %#v)", addr, buf.Len(), err)
+				if err != nil {
+					log.Printf("-- fallthrough to socks5 - %s [%d](err: %s)", addr, buf.Len(), err)
+				} else {
+					log.Printf("-- fallthrough to socks5 - %s [%d](err: nil)", addr, buf.Len())
+				}
 			case received < 0:
 				log.Printf("[!!] add %s to remote cache - %d", addr, received)
 				remote.Close()
