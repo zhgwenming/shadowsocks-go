@@ -274,6 +274,18 @@ func createServerConn(rawaddr []byte, addr string) (remote *ss.Conn, err error) 
 	return nil, err
 }
 
+func IsReset(err error) bool {
+	if e, ok := err.(*net.OpError); ok && e.Op == "read" {
+		if errno, ok := e.Err.(syscall.Errno); ok {
+			if errno == syscall.ECONNRESET {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func NetpollerReadTimeout(err error) bool {
 	if e, ok := err.(*net.OpError); ok && e.Op == "read" {
 		// not a syscall timeo
@@ -286,7 +298,7 @@ func NetpollerReadTimeout(err error) bool {
 }
 
 // babysitting the direct connection
-func directDuplexCopy(remote net.Conn, conn net.Conn, buf io.Writer) (received int64, err error) {
+func directDuplexCopyTimeout(remote net.Conn, conn net.Conn, buf io.Writer) (received int64, err error) {
 
 	var extra int64
 
@@ -340,6 +352,37 @@ func directDuplexCopy(remote net.Conn, conn net.Conn, buf io.Writer) (received i
 
 	// reset conn timer to accept new data
 	conn.SetReadDeadline(time.Time{})
+
+	return
+}
+
+func directDuplexCopy(remote net.Conn, conn net.Conn, buf io.Writer) (received int64, err error) {
+
+	wait := make(chan struct{})
+
+	go func() {
+		to := io.MultiWriter(remote, buf)
+		io.Copy(to, conn)
+		remote.SetReadDeadline(time.Now())
+		close(wait)
+	}()
+
+	received, err = io.Copy(conn, remote)
+
+	// OpError{Err: net.timeoutError}
+	if NetpollerReadTimeout(err) {
+		err = nil
+	}
+
+	// end the sender goroutine
+	conn.SetReadDeadline(time.Now())
+	defer conn.SetReadDeadline(time.Time{})
+
+	<-wait
+
+	// returning with:
+	// 1. nil - remote closed connection
+	// 2. other non-netpoller (os/syscall - reset etc.) errors
 
 	return
 }
@@ -432,7 +475,7 @@ func handleConnection(conn net.Conn) {
 
 			switch {
 			case received > 0:
-				if err != nil {
+				if IsReset(err) {
 					if remoteSites.Add(host, true) {
 						log.Printf("[pre] add %s to remote cache - %d (%s)", addr, received, err)
 					}
@@ -443,17 +486,18 @@ func handleConnection(conn net.Conn) {
 			case received == 0:
 				// recoverable connection
 				remote.Close()
-				if buf.Len() > 0 {
-					if err != nil {
-						log.Printf("-- fallthrough to socks5 - %s [%d](err: %s)", addr, buf.Len(), err)
-					} else {
-						log.Printf("-- fallthrough to socks5 - %s [%d](err: nil)", addr, buf.Len())
-					}
+
+				if IsReset(err) {
+					log.Printf("-- fallthrough to socks5 - %s [%d](err: %s)", addr, buf.Len(), err)
 				} else {
+					if err != nil {
+						log.Printf("-- returning - %s [%d](err: %s)", addr, buf.Len(), err)
+					}
+					// normal connection end
 					conn.Close()
-					log.Printf("-- returning - %s [%d](err: nil)", addr, buf.Len())
 					return
 				}
+
 			case received < 0:
 				log.Printf("[!!] add %s to remote cache - %d", addr, received)
 				remote.Close()
@@ -487,8 +531,10 @@ func handleConnection(conn net.Conn) {
 	debug.Println("closed connection to", addr)
 
 	if newSockSite {
-		if remoteSites.Confirm(host) {
-			log.Println("[fin] confirmed cache connection to", addr)
+		if err == nil {
+			if remoteSites.Confirm(host) {
+				log.Println("[fin] confirmed cache connection to", addr)
+			}
 		}
 	}
 }
