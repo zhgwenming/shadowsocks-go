@@ -415,6 +415,7 @@ func forwardDuplexCopyClose(remote net.Conn, conn net.Conn, buf *bytes.Buffer) (
 
 func handleConnection(conn net.Conn) {
 	var forked bool
+	start := time.Now()
 	if debug {
 		debug.Printf("socks connect from %s\n", conn.RemoteAddr().String())
 	}
@@ -479,7 +480,7 @@ func handleConnection(conn net.Conn) {
 			case received > 0:
 				if IsReset(err) {
 					if remoteSites.Add(host) {
-						log.Printf("[pre] add %s to remote cache - [received: %d] (%s)", addr, received, err)
+						log.Printf("[pre] add %s to remote cache - [recv: %d] (%s)", addr, received, err)
 					}
 				}
 				remote.Close()
@@ -490,10 +491,10 @@ func handleConnection(conn net.Conn) {
 				remote.Close()
 
 				if IsReset(err) {
-					log.Printf("-- fallthrough to socks5 - %s [bufsz: %d] (err: %s)", addr, buf.Len(), err)
+					log.Printf("-- fallthrough to socks5 - %s [req: %d] (err: %s)", addr, buf.Len(), err)
 				} else {
 					if err != nil {
-						log.Printf("-- returning - %s [bufsz: %d] (err: %s)", addr, buf.Len(), err)
+						log.Printf("-- returning - %s [req: %d] (err: %s)", addr, buf.Len(), err)
 					}
 					// normal connection end
 					conn.Close()
@@ -508,6 +509,9 @@ func handleConnection(conn net.Conn) {
 			}
 		}
 
+		rstart := time.Now()
+		slat := rstart.Sub(start).Seconds()
+
 		remote, err = createServerConn(rawaddr, addr)
 		if err != nil {
 			if len(servers.srvCipher) > 1 {
@@ -516,11 +520,13 @@ func handleConnection(conn net.Conn) {
 			return
 		}
 
+		elat := time.Now().Sub(rstart).Seconds()
+
 		if remoteSites.Add(host) {
 			newSockSite = true
-			log.Printf("[new] socks5 connected to %s", addr)
+			log.Printf("[new] socks5 connected to %s [%.2f+%.2fs]", addr, slat, elat)
 		} else {
-			log.Printf("[---] socks5 connected to %s", addr)
+			log.Printf("[---] socks5 connected to %s [%.2f+%.2fs]", addr, slat, elat)
 		}
 
 		received, err = forwardDuplexCopyClose(remote, conn, buf)
@@ -535,7 +541,8 @@ func handleConnection(conn net.Conn) {
 	if newSockSite {
 		if err == nil && received > 0 {
 			if remoteSites.Confirm(host) {
-				log.Printf("[fin] confirmed cache connection to %s [received: %d]", addr, received)
+				last := time.Now().Sub(start).Seconds()
+				log.Printf("[fin] confirmed cache connection to %s [recv: %d bytes - %.2fs]", addr, received, last)
 			}
 		}
 	}
